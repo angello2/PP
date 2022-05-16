@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun May 15 16:34:21 2022
+Created on Mon May 16 18:51:30 2022
 
 @author: Filip
 """
@@ -11,6 +11,13 @@ from board import Board
 import sys
 import time
 import numpy as np
+
+DATA = 1
+REQUEST = 2
+TASK = 3
+RESULT = 4
+WAIT = 5
+END = 6
 
 def evaluate(board, cpu_turn, last_change, depth):    
     game_over, winner = board.check_win(last_change)
@@ -47,24 +54,18 @@ def evaluate(board, cpu_turn, last_change, depth):
     
     return score_sum / 7   
 
-DATA = 1
-REQUEST = 2
-TASK = 3
-RESULT = 4
-WAIT = 5
-END = 6
-
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.size
 
-print('hello %d on %s' % (rank, MPI.Get_processor_name()))
+print('Started process', rank, flush=True)
 comm.Barrier()
 
 if rank == 0:
     board = Board()
     while True:
-        print(board)    
+        print('Current board state:\n', board, flush=True)
+        print()
         
         start_time = time.time()
             
@@ -86,21 +87,25 @@ if rank == 0:
             source = status.Get_source()
             
             if msg['type'] == REQUEST:
+                unfinished_task = None
                 for task, result in tasks.items():
                     if result is None:
                         unfinished_task = task
+                        break
                 if unfinished_task is not None:
+                    print('master found unfinished task:', unfinished_task[0], unfinished_task[1], flush=True)
                     tasks[unfinished_task] = True
+                    print('Updated tasks:', tasks)
                     answer = {'type':TASK, 'task':task}
-                    comm.send(answer, dest=source)
                 else:
+                    answer = {'vrsta':WAIT}
                     active_workers -= 1
                     if active_workers == 0:
                         finished = True
-                    answer = {'vrsta':WAIT}
-                    comm.send(answer, dest = source)
+                comm.send(answer, dest=source)
             
             if msg['type'] == RESULT:
+                print('Master primio rezultat za task', msg['task'], ' = ', msg['result'])
                 tasks[msg['task']] = msg['result']
                 
         move_score = []
@@ -120,54 +125,56 @@ if rank == 0:
         end_time = time.time()
         
         for i in range(7):
-            print('Kvaliteta poteza', i, 'je', move_score[i])
-        print('Najbolji potez je', best_move)
-        print('Vrijeme izračuna:', end_time - start_time, 'sekundi')
+            print('Move quality of move', i, 'is', move_score[i], flush=True)
+        print('The best move is', best_move, flush=True)
+        print('Calculation time:', end_time - start_time, 'seconds', flush=True)
             
         board.play_column(best_move, 'cpu')
         print(board)
         game_over, winner = board.check_win(best_move)
         if game_over:
-            print('CPU pobjedio')
+            print('CPU won', flush=True)
             for i in range(active_workers):
                 msg = {'type':END}
                 comm.send(msg, dest=i)
                 break  
         
-        player_move = int(input('Unesite stupac koji želite odigrati:'))
+        player_move = int(input('Enter your move:'))
         board.play_column(player_move, 'human')
-        print(board)
         game_over, winner = board.check_win(best_move)
         if game_over:
-            print('Igrač pobjedio')
+            print('You won!', flush=True)
             for i in range(active_workers):
                 msg = {'type':END}
                 comm.send(msg, dest=i)
                 break
-        
+            
 else:
     while True:
         msg = comm.recv(source=0)
         
         if msg['type'] == END:
-            print('Proces', rank, 'završava s radom.')
+            print('Process', rank, 'has no more work.', flush=True)
             break
         
         if msg['type'] == DATA:
-            print('Proces', rank, 'primio podatke.')
+            print('Process', rank, 'received data.', flush=True)
             board = msg['board']
             
         while True:
             # zahtjev za zadatkom
             msg = {'type':REQUEST}
             comm.send(msg, dest=0)
+            print('Process', rank, 'sent request for work.', flush=True)
             
             response = comm.recv(source = 0)
+            print('Process', rank, 'received response.', flush=True)
             if response['type'] == WAIT:
                 break
             elif response['type'] == TASK:
                 task = response['task']
                 
+            print('Process', rank, 'is doing task:(' +  str(task[0]) + ',' + str(task[1]) + ')', flush=True)
             board.play_column(task[0], player='cpu')
             game_over, winner = board.check_win(task[0])
             if game_over:
@@ -186,14 +193,11 @@ else:
                 comm.send(msg, dest=0)
                 continue
             
-            result = evaluate(board, True, task[1], 6)
+            result = evaluate(board, True, task[1], 5)
+            print('Process', rank, 'got result for evaluate:', result, flush=True)
             
             board.undo_column(task[1])
             board.undo_column(task[0])
             
             msg = {'type':RESULT, 'task':task, 'result':result}
             comm.send(msg, dest=0)
-            
-        
-        
-        
