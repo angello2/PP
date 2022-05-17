@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun May 15 16:34:21 2022
+Created on Mon May 16 18:51:30 2022
 
 @author: Filip
 """
@@ -10,14 +10,13 @@ from board import Board
 
 import sys
 import time
-import numpy as np
 
 def evaluate(board, cpu_turn, last_change, depth):    
     game_over, winner = board.check_win(last_change)
     if game_over:
-        if winner == 1:
+        if not cpu_turn:
             return 1
-        elif winner == 2:
+        elif cpu_turn:
             return -1
     
     if depth == 0:
@@ -47,24 +46,18 @@ def evaluate(board, cpu_turn, last_change, depth):
     
     return score_sum / 7   
 
-DATA = 1
-REQUEST = 2
-TASK = 3
-RESULT = 4
-WAIT = 5
-END = 6
-
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.size
 
-print('hello %d on %s' % (rank, MPI.Get_processor_name()))
+print('Started process', rank, flush=True)
 comm.Barrier()
 
 if rank == 0:
     board = Board()
     while True:
-        print(board)    
+        print('Current board state:\n', board, flush=True)
+        print()
         
         start_time = time.time()
             
@@ -75,7 +68,7 @@ if rank == 0:
                     
         # saljemo plocu ostalim procesima
         for x in range(1, size):
-            msg = {'type':DATA, 'board':board}
+            msg = {'type':'data', 'board':board}
             comm.send(msg, dest=x)
         
         active_workers = size - 1
@@ -85,22 +78,23 @@ if rank == 0:
             msg = comm.recv(source=MPI.ANY_SOURCE, status=status)
             source = status.Get_source()
             
-            if msg['type'] == REQUEST:
+            if msg['type'] == 'request':
+                unfinished_task = None
                 for task, result in tasks.items():
                     if result is None:
                         unfinished_task = task
+                        break
                 if unfinished_task is not None:
                     tasks[unfinished_task] = True
-                    answer = {'type':TASK, 'task':task}
-                    comm.send(answer, dest=source)
+                    answer = {'type':'task', 'task':task}
                 else:
+                    answer = {'type':'wait'}
                     active_workers -= 1
                     if active_workers == 0:
                         finished = True
-                    answer = {'vrsta':WAIT}
-                    comm.send(answer, dest = source)
+                comm.send(answer, dest=source)
             
-            if msg['type'] == RESULT:
+            if msg['type'] == 'result':
                 tasks[msg['task']] = msg['result']
                 
         move_score = []
@@ -120,60 +114,57 @@ if rank == 0:
         end_time = time.time()
         
         for i in range(7):
-            print('Kvaliteta poteza', i, 'je', move_score[i])
-        print('Najbolji potez je', best_move)
-        print('Vrijeme izračuna:', end_time - start_time, 'sekundi')
+            print('Move quality for move', i, 'is', move_score[i], flush=True)
+        print('The best move is', best_move, flush=True)
+        print('Calculation time:', end_time - start_time, 'seconds', flush=True)
             
         board.play_column(best_move, 'cpu')
-        print(board)
         game_over, winner = board.check_win(best_move)
+        print(board)
         if game_over:
-            print('CPU pobjedio')
-            for i in range(active_workers):
-                msg = {'type':END}
+            print('CPU won', flush=True)
+            for i in range(7):
+                msg = {'type':'end'}
                 comm.send(msg, dest=i)
-                break  
+            sys.exit()
         
-        player_move = int(input('Unesite stupac koji želite odigrati:'))
+        player_move = int(input('Enter your move:'))
         board.play_column(player_move, 'human')
         print(board)
-        game_over, winner = board.check_win(best_move)
+        game_over, winner = board.check_win(player_move)
         if game_over:
-            print('Igrač pobjedio')
-            for i in range(active_workers):
-                msg = {'type':END}
+            print('You won!', flush=True)
+            for i in range(7):
+                msg = {'type':'end'}
                 comm.send(msg, dest=i)
-                break
-        
+            sys.exit()
+            
 else:
     while True:
         msg = comm.recv(source=0)
         
-        if msg['type'] == END:
-            print('Proces', rank, 'završava s radom.')
-            break
-        
-        if msg['type'] == DATA:
-            print('Proces', rank, 'primio podatke.')
+        if msg['type'] == 'end':
+            sys.exit()
+            
+        if msg['type'] == 'data':
             board = msg['board']
             
         while True:
             # zahtjev za zadatkom
-            msg = {'type':REQUEST}
+            msg = {'type':'request'}
             comm.send(msg, dest=0)
             
             response = comm.recv(source = 0)
-            if response['type'] == WAIT:
+            if response['type'] == 'wait':
                 break
-            elif response['type'] == TASK:
+            elif response['type'] == 'task':
                 task = response['task']
-                
             board.play_column(task[0], player='cpu')
             game_over, winner = board.check_win(task[0])
             if game_over:
                 result = 1
                 board.undo_column(task[0])
-                msg = {'type':RESULT, 'task':task, 'result':result}
+                msg = {'type':'result', 'task':task, 'result':result}
                 comm.send(msg, dest=0)
                 continue
             
@@ -182,18 +173,14 @@ else:
             if game_over:
                 result = -1
                 board.undo_column(task[1])
-                msg = {'type':RESULT, 'task':task, 'result':result}
+                msg = {'type':'result', 'task':task, 'result':result}
                 comm.send(msg, dest=0)
                 continue
             
-            result = evaluate(board, True, task[1], 6)
+            result = evaluate(board, True, task[1], 5)
             
             board.undo_column(task[1])
             board.undo_column(task[0])
             
-            msg = {'type':RESULT, 'task':task, 'result':result}
+            msg = {'type':'result', 'task':task, 'result':result}
             comm.send(msg, dest=0)
-            
-        
-        
-        
