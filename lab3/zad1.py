@@ -59,7 +59,7 @@ if __name__ == '__main__':
 
     start_time = time()
     # paralelni dio
-    program.prim(queue, (G,), None, buffer_niz, buffer_broj_prim, niz_len)
+    program.prim(queue, (G, L), None, buffer_niz, buffer_broj_prim, niz_len)
     queue.finish()
     cl.enqueue_copy(queue, broj_prim, buffer_broj_prim)
     # kraj paralelnog dijela

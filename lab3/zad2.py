@@ -5,38 +5,22 @@ from time import time
 if __name__ == '__main__':
     code = """
     __kernel void pi(
-        __global int* niz,        
-        __global int* broj_prim,
+        __global int* niz,
+        __global float* mypi,       
         const unsigned int niz_len
         )
     {
         int gid = get_global_id(0);
         int g = get_global_size(0);
         int broj_zadataka = (int) ceil((float) niz_len / g);
-        if (gid == 0) {
-            broj_prim[0] = 0;
-        }
         if (gid < niz_len)
         {
+            float h = 1.0 / (float) niz_len;
             for(int zad = 0; zad < broj_zadataka; zad++){
-                int prim = 1;
                 if(gid * broj_zadataka + zad >= niz_len) break;
-                int n = niz[gid * broj_zadataka + zad];
-                if (n == 1) {
-                    prim = 0;
-                }
-                if(!(n == 2 || n == 3)) {
-                    int m = n/2;  
-                    for(int i = 2; i <= m; i++)  
-                    {  
-                        if(n % i == 0)  
-                        {  
-                            prim = 0;
-                            break;  
-                        }  
-                    }  
-                }
-                atomic_add(broj_prim, prim);
+                int i = niz[gid * broj_zadataka + zad];
+                float x = h * ((float) i - 0.5);
+                mypi[gid * broj_zadataka + zad] = 4.0 / (1.0 + x * x);
             }
         }     
     }
@@ -51,18 +35,25 @@ if __name__ == '__main__':
 
     niz = np.arange(1, N + 1, 1, dtype='int32')
     niz_len = np.int32(len(niz))
-    broj_prim = np.empty((1), dtype='int32')
+    mypi = np.empty((N,), dtype='float32')
 
     buffer_niz = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=niz)
-    buffer_broj_prim = cl.Buffer(context, cl.mem_flags.READ_WRITE, broj_prim.nbytes)
+    buffer_pi = cl.Buffer(context, cl.mem_flags.READ_WRITE, mypi.nbytes)
 
     start_time = time()
     # paralelni dio
-    program.prim(queue, (G,L), None, buffer_niz, buffer_broj_prim, niz_len)
+    program.pi(queue, (G,), None, buffer_niz, buffer_pi, niz_len)
     queue.finish()
-    cl.enqueue_copy(queue, broj_prim, buffer_broj_prim)
+    cl.enqueue_copy(queue, mypi, buffer_pi)
     # kraj paralelnog dijela
     run_time = time() - start_time
 
-    print('Broj prim brojeva u prvih', N, 'brojeva: ', broj_prim)
-    print('Rješenje pronađeno u', run_time, 'sekundi')
+    # ovaj dio je u glavnom programu jer atomic_add ne podrzava float
+    sum = 0.0
+    for x in mypi:
+        sum += x
+
+    sum /= N
+
+    print('Aproksimacija Pi za N =', N, ':', sum)
+    print('Rješenje dobiveno u', run_time, 'sekundi')
